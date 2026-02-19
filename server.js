@@ -3,6 +3,9 @@ const { Pool } = require("pg");
 
 const app = express();
 app.use(express.json());
+app.get('/', (req, res) => {
+  res.send('Webhook server running');
+});
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
