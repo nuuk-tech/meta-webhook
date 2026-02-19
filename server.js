@@ -215,6 +215,118 @@ for (const r of records) {
 
   metaRowsUpserted++;
 }
+app.get("/backfill", async (req, res) => {
+  try {
+    const start = req.query.start;  // format YYYY-MM-DD
+    const end = req.query.end;      // format YYYY-MM-DD
+
+    if (!start || !end) {
+      return res.status(400).send("Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD");
+    }
+
+    const accountId = process.env.META_AD_ACCOUNT_ID;
+    const accessToken = process.env.META_ACCESS_TOKEN;
+
+    let current = new Date(start);
+    const endDate = new Date(end);
+
+    let totalInserted = 0;
+
+    while (current <= endDate) {
+      const dateStr = current.toISOString().split("T")[0];
+      console.log("Backfilling:", dateStr);
+
+      const url =
+        `https://graph.facebook.com/v19.0/${accountId}/insights` +
+        `?level=ad` +
+        `&fields=date_start,ad_id,ad_name,campaign_name,impressions,clicks,spend,actions,action_values` +
+        `&time_range={'since':'${dateStr}','until':'${dateStr}'}` +
+        `&access_token=${accessToken}`;
+
+      const response = await fetch(url);
+      const json = await response.json();
+
+      if (json.data) {
+        for (const row of json.data) {
+          const impressions = parseInt(row.impressions || 0);
+          const clicks = parseInt(row.clicks || 0);
+          const spend = parseFloat(row.spend || 0);
+
+          let purchases = 0;
+          let purchase_value = 0;
+
+          if (row.actions) {
+            const purchaseAction = row.actions.find(a => a.action_type === "purchase");
+            if (purchaseAction) purchases = parseInt(purchaseAction.value);
+          }
+
+          if (row.action_values) {
+            const purchaseValue = row.action_values.find(a => a.action_type === "purchase");
+            if (purchaseValue) purchase_value = parseFloat(purchaseValue.value);
+          }
+
+          const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+          const cpc = clicks > 0 ? spend / clicks : 0;
+          const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+          const roas = spend > 0 ? purchase_value / spend : 0;
+
+          const match = row.ad_name ? row.ad_name.match(/NK[-_]\d+/i) : null;
+          const adCode = match ? match[0].toUpperCase().replace("_", "-") : null;
+
+          await pool.query(
+            `
+            INSERT INTO meta_ads_fact (
+              date, ad_id, ad_name, ad_code, campaign_name,
+              spend, impressions, clicks, ctr, cpc, cpm,
+              purchases, purchase_value, roas
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+            ON CONFLICT (date, ad_id)
+            DO UPDATE SET
+              ad_name = EXCLUDED.ad_name,
+              campaign_name = EXCLUDED.campaign_name,
+              spend = EXCLUDED.spend,
+              impressions = EXCLUDED.impressions,
+              clicks = EXCLUDED.clicks,
+              ctr = EXCLUDED.ctr,
+              cpc = EXCLUDED.cpc,
+              cpm = EXCLUDED.cpm,
+              purchases = EXCLUDED.purchases,
+              purchase_value = EXCLUDED.purchase_value,
+              roas = EXCLUDED.roas
+            `,
+            [
+              row.date_start,
+              row.ad_id,
+              row.ad_name,
+              adCode,
+              row.campaign_name,
+              spend,
+              impressions,
+              clicks,
+              ctr,
+              cpc,
+              cpm,
+              purchases,
+              purchase_value,
+              roas,
+            ]
+          );
+
+          totalInserted++;
+        }
+      }
+
+      current.setDate(current.getDate() + 1);
+    }
+
+    res.send(`Backfill complete. Rows processed: ${totalInserted}`);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Backfill failed");
+  }
+});
 
 
     /* --------------------------
