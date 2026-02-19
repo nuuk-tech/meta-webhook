@@ -89,6 +89,10 @@ app.post("/ingest-meta", async (req, res) => {
    DAILY META PULL + METADATA SYNC
 --------------------------- */
 app.get("/run-daily", async (req, res) => {
+  if (req.query.secret !== process.env.CRON_SECRET) {
+  return res.status(401).send("Unauthorized");
+}
+
   try {
 /* --------------------------
   1.  SYNC METADATA FROM GOOGLE SHEET (ALL HEADERS)
