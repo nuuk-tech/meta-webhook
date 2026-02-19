@@ -6,6 +6,28 @@ const { parse } = require("csv-parse/sync");
 const app = express();
 app.use(express.json());
 
+function parseSheetDateToISO(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // Common India format: DD/MM/YYYY or DD-MM-YYYY
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const dd = m[1].padStart(2, "0");
+    const mm = m[2].padStart(2, "0");
+    const yyyy = m[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  // If unknown format, keep raw only
+  return null;
+}
+
+
 /* --------------------------
    DATABASE CONNECTION (ONLY ONCE)
 --------------------------- */
@@ -94,12 +116,15 @@ for (const r of records) {
   // Clean up headers
   const metaDescriptor =
     (r["Meta Ad Descriptor "] || r["Meta Ad Descriptor"] || "").trim() || null;
+   
+   const dateRaw = (r["Date"] || "").trim() || null;
+   const dateISO = parseSheetDateToISO(dateRaw);
 
   await pool.query(
     `
     INSERT INTO ad_metadata_dim (
       ad_code,
-      month, date,
+      month, date_raw,
       creative_name, creative_link, product,
       funnel_level, ad_objective, creative_type_format, visual_style,
       content_pillar_bucket_narrative, hook, key_rtb_reason_to_buy,
@@ -118,12 +143,14 @@ for (const r of records) {
       $14, $15, $16,
       $17, $18, $19, $20, $21,
       $22,
-      $23, $24, $25,
+      $23, $24, $25, $26,
       CURRENT_TIMESTAMP
     )
+    
     ON CONFLICT (ad_code)
     DO UPDATE SET
       month = EXCLUDED.month,
+      date_raw = EXCLUDED.date,
       date = EXCLUDED.date,
       creative_name = EXCLUDED.creative_name,
       creative_link = EXCLUDED.creative_link,
@@ -152,7 +179,9 @@ for (const r of records) {
     [
       ad_code,
       (r["Month"] || "").trim() || null,
-      (r["Date"] || "").trim() || null,
+       dateRaw,
+       dateISO,
+      //(r["Date"] || "").trim() || null,
 
       (r["Creative Name"] || "").trim() || null,
       (r["Creative Link"] || "").trim() || null,
