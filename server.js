@@ -68,124 +68,126 @@ app.post("/ingest-meta", async (req, res) => {
 --------------------------- */
 app.get("/run-daily", async (req, res) => {
   try {
-    /* --------------------------
-       1) SYNC METADATA FROM GOOGLE SHEET
-    --------------------------- */
-    const sheetUrl =
-      "https://docs.google.com/spreadsheets/d/1Uu2pnd-i6-PNh_YLeAFvQUu0AaVtwkBnVTLY4U5gKGM/export?format=csv&gid=970591175";
+/* --------------------------
+  1.  SYNC METADATA FROM GOOGLE SHEET (ALL HEADERS)
+--------------------------- */
+const sheetUrl =
+  "https://docs.google.com/spreadsheets/d/1Uu2pnd-i6-PNh_YLeAFvQUu0AaVtwkBnVTLY4U5gKGM/export?format=csv&gid=970591175";
 
-    const sheetResponse = await fetch(sheetUrl);
-    const csvText = await sheetResponse.text();
+const sheetResponse = await fetch(sheetUrl);
+const csvText = await sheetResponse.text();
 
-    const records = parse(csvText, {
-      columns: true,
-      skip_empty_lines: true,
-      relax_column_count: true,
-    });
+const records = parse(csvText, {
+  columns: true,
+  skip_empty_lines: true,
+  relax_column_count: true,
+});
 
-    let metaRowsUpserted = 0;
+let metaRowsUpserted = 0;
 
-    for (const r of records) {
-      const adCodeRaw = (r["Ad Code"] || "").trim();
-      const ad_code = adCodeRaw.toUpperCase().replace("_", "-");
-      if (!ad_code) continue;
+for (const r of records) {
+  // IMPORTANT: "Ad Code" is the primary key
+  const adCodeRaw = (r["Ad Code"] || "").trim();
+  const ad_code = adCodeRaw.toUpperCase().replace("_", "-");
+  if (!ad_code) continue;
 
-      await pool.query(
-        `
-        INSERT INTO ad_metadata_dim (
-          ad_code,
-          month,
-          date,
-          creative_name,
-          creative_link,
-          product,
-          funnel_level,
-          ad_objective,
-          creative_type_format,
-          visual_style,
-          narrative_bucket,
-          hook,
-          key_rtb,
-          voice_over,
-          primary_emotion_tone,
-          language_captions_supers,
-          offer,
-          prices,
-          season,
-          production_team,
-          created_by,
-          starring,
-          meta_ad_title,
-          meta_ad_descriptor,
-          live,
-          updated_at
-        )
-        VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-          $21,$22,$23,$24,$25, CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (ad_code)
-        DO UPDATE SET
-          month = EXCLUDED.month,
-          date = EXCLUDED.date,
-          creative_name = EXCLUDED.creative_name,
-          creative_link = EXCLUDED.creative_link,
-          product = EXCLUDED.product,
-          funnel_level = EXCLUDED.funnel_level,
-          ad_objective = EXCLUDED.ad_objective,
-          creative_type_format = EXCLUDED.creative_type_format,
-          visual_style = EXCLUDED.visual_style,
-          narrative_bucket = EXCLUDED.narrative_bucket,
-          hook = EXCLUDED.hook,
-          key_rtb = EXCLUDED.key_rtb,
-          voice_over = EXCLUDED.voice_over,
-          primary_emotion_tone = EXCLUDED.primary_emotion_tone,
-          language_captions_supers = EXCLUDED.language_captions_supers,
-          offer = EXCLUDED.offer,
-          prices = EXCLUDED.prices,
-          season = EXCLUDED.season,
-          production_team = EXCLUDED.production_team,
-          created_by = EXCLUDED.created_by,
-          starring = EXCLUDED.starring,
-          meta_ad_title = EXCLUDED.meta_ad_title,
-          meta_ad_descriptor = EXCLUDED.meta_ad_descriptor,
-          live = EXCLUDED.live,
-          updated_at = CURRENT_TIMESTAMP
-        `,
-        [
-          ad_code,
-          (r["Month"] || "").trim() || null,
-          (r["Date"] || "").trim() || null,
-          (r["Creative Name"] || "").trim() || null,
-          (r["Creative Link"] || "").trim() || null,
-          (r["Product"] || "").trim() || null,
-          (r["Funnel Level"] || "").trim() || null,
-          (r["Ad Objective"] || "").trim() || null,
-          (r["Creative Type (Format)"] || "").trim() || null,
-          (r["Visual Style"] || "").trim() || null,
-          (r["Content/ Pillar Bucket ( Narrative )"] || "").trim() || null,
-          (r["Hook"] || "").trim() || null,
-          (r["Key RTB (Reason to Buy)"] || "").trim() || null,
-          (r["Voice Over"] || "").trim() || null,
-          (r["Primary Emotion/Tone"] || "").trim() || null,
-          (r["Language / Captions / Supers"] || "").trim() || null,
-          (r["Offer"] || "").trim() || null,
-          (r["Prices"] || "").trim() || null,
-          (r["Season"] || "").trim() || null,
-          (r["Production Team"] || "").trim() || null,
-          (r["Created By"] || "").trim() || null,
-          (r["Starring (Name of Person in Video / Product Only)"] || "").trim() ||
-            null,
-          (r["Meta Ad Title"] || "").trim() || null,
-          (r["Meta Ad Descriptor "] || r["Meta Ad Descriptor"] || "").trim() ||
-            null,
-          (r["Live"] || "").trim() || null,
-        ]
-      );
+  // Clean up headers
+  const metaDescriptor =
+    (r["Meta Ad Descriptor "] || r["Meta Ad Descriptor"] || "").trim() || null;
 
-      metaRowsUpserted++;
-    }
+  await pool.query(
+    `
+    INSERT INTO ad_metadata_dim (
+      ad_code,
+      month, date,
+      creative_name, creative_link, product,
+      funnel_level, ad_objective, creative_type_format, visual_style,
+      content_pillar_bucket_narrative, hook, key_rtb_reason_to_buy,
+      voice_over, primary_emotion_tone, language_captions_supers,
+      offer, prices, season, production_team, created_by,
+      starring_name_in_video_product_only,
+      meta_ad_title, meta_ad_descriptor, live,
+      updated_at
+    )
+    VALUES (
+      $1,
+      $2, $3,
+      $4, $5, $6,
+      $7, $8, $9, $10,
+      $11, $12, $13,
+      $14, $15, $16,
+      $17, $18, $19, $20, $21,
+      $22,
+      $23, $24, $25,
+      CURRENT_TIMESTAMP
+    )
+    ON CONFLICT (ad_code)
+    DO UPDATE SET
+      month = EXCLUDED.month,
+      date = EXCLUDED.date,
+      creative_name = EXCLUDED.creative_name,
+      creative_link = EXCLUDED.creative_link,
+      product = EXCLUDED.product,
+      funnel_level = EXCLUDED.funnel_level,
+      ad_objective = EXCLUDED.ad_objective,
+      creative_type_format = EXCLUDED.creative_type_format,
+      visual_style = EXCLUDED.visual_style,
+      content_pillar_bucket_narrative = EXCLUDED.content_pillar_bucket_narrative,
+      hook = EXCLUDED.hook,
+      key_rtb_reason_to_buy = EXCLUDED.key_rtb_reason_to_buy,
+      voice_over = EXCLUDED.voice_over,
+      primary_emotion_tone = EXCLUDED.primary_emotion_tone,
+      language_captions_supers = EXCLUDED.language_captions_supers,
+      offer = EXCLUDED.offer,
+      prices = EXCLUDED.prices,
+      season = EXCLUDED.season,
+      production_team = EXCLUDED.production_team,
+      created_by = EXCLUDED.created_by,
+      starring_name_in_video_product_only = EXCLUDED.starring_name_in_video_product_only,
+      meta_ad_title = EXCLUDED.meta_ad_title,
+      meta_ad_descriptor = EXCLUDED.meta_ad_descriptor,
+      live = EXCLUDED.live,
+      updated_at = CURRENT_TIMESTAMP
+    `,
+    [
+      ad_code,
+      (r["Month"] || "").trim() || null,
+      (r["Date"] || "").trim() || null,
+
+      (r["Creative Name"] || "").trim() || null,
+      (r["Creative Link"] || "").trim() || null,
+      (r["Product"] || "").trim() || null,
+
+      (r["Funnel Level"] || "").trim() || null,
+      (r["Ad Objective"] || "").trim() || null,
+      (r["Creative Type (Format)"] || "").trim() || null,
+      (r["Visual Style"] || "").trim() || null,
+
+      (r["Content/ Pillar Bucket ( Narrative )"] || "").trim() || null,
+      (r["Hook"] || "").trim() || null,
+      (r["Key RTB (Reason to Buy)"] || "").trim() || null,
+
+      (r["Voice Over"] || "").trim() || null,
+      (r["Primary Emotion/Tone"] || "").trim() || null,
+      (r["Language / Captions / Supers"] || "").trim() || null,
+
+      (r["Offer"] || "").trim() || null,
+      (r["Prices"] || "").trim() || null,
+      (r["Season"] || "").trim() || null,
+      (r["Production Team"] || "").trim() || null,
+      (r["Created By"] || "").trim() || null,
+
+      (r["Starring (Name of Person in Video / Product Only)"] || "").trim() || null,
+
+      (r["Meta Ad Title"] || "").trim() || null,
+      metaDescriptor,
+      (r["Live"] || "").trim() || null,
+    ]
+  );
+
+  metaRowsUpserted++;
+}
+
 
     /* --------------------------
        2) PULL META (YESTERDAY)
