@@ -1,6 +1,7 @@
 const express = require("express");
 const { Pool } = require("pg");
 const fetch = require("node-fetch");
+const { parse } = require("csv-parse/sync");
 
 const app = express();
 app.use(express.json());
@@ -63,15 +64,135 @@ app.post("/ingest-meta", async (req, res) => {
 });
 
 /* --------------------------
-   DAILY META PULL
+   DAILY META PULL + METADATA SYNC
 --------------------------- */
 app.get("/run-daily", async (req, res) => {
   try {
+    /* --------------------------
+       1) SYNC METADATA FROM GOOGLE SHEET
+    --------------------------- */
+    const sheetUrl =
+      "https://docs.google.com/spreadsheets/d/1Uu2pnd-i6-PNh_YLeAFvQUu0AaVtwkBnVTLY4U5gKGM/export?format=csv&gid=970591175";
+
+    const sheetResponse = await fetch(sheetUrl);
+    const csvText = await sheetResponse.text();
+
+    const records = parse(csvText, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_column_count: true,
+    });
+
+    let metaRowsUpserted = 0;
+
+    for (const r of records) {
+      const adCodeRaw = (r["Ad Code"] || "").trim();
+      const ad_code = adCodeRaw.toUpperCase().replace("_", "-");
+      if (!ad_code) continue;
+
+      await pool.query(
+        `
+        INSERT INTO ad_metadata_dim (
+          ad_code,
+          month,
+          date,
+          creative_name,
+          creative_link,
+          product,
+          funnel_level,
+          ad_objective,
+          creative_type_format,
+          visual_style,
+          narrative_bucket,
+          hook,
+          key_rtb,
+          voice_over,
+          primary_emotion_tone,
+          language_captions_supers,
+          offer,
+          prices,
+          season,
+          production_team,
+          created_by,
+          starring,
+          meta_ad_title,
+          meta_ad_descriptor,
+          live,
+          updated_at
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+          $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+          $21,$22,$23,$24,$25, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (ad_code)
+        DO UPDATE SET
+          month = EXCLUDED.month,
+          date = EXCLUDED.date,
+          creative_name = EXCLUDED.creative_name,
+          creative_link = EXCLUDED.creative_link,
+          product = EXCLUDED.product,
+          funnel_level = EXCLUDED.funnel_level,
+          ad_objective = EXCLUDED.ad_objective,
+          creative_type_format = EXCLUDED.creative_type_format,
+          visual_style = EXCLUDED.visual_style,
+          narrative_bucket = EXCLUDED.narrative_bucket,
+          hook = EXCLUDED.hook,
+          key_rtb = EXCLUDED.key_rtb,
+          voice_over = EXCLUDED.voice_over,
+          primary_emotion_tone = EXCLUDED.primary_emotion_tone,
+          language_captions_supers = EXCLUDED.language_captions_supers,
+          offer = EXCLUDED.offer,
+          prices = EXCLUDED.prices,
+          season = EXCLUDED.season,
+          production_team = EXCLUDED.production_team,
+          created_by = EXCLUDED.created_by,
+          starring = EXCLUDED.starring,
+          meta_ad_title = EXCLUDED.meta_ad_title,
+          meta_ad_descriptor = EXCLUDED.meta_ad_descriptor,
+          live = EXCLUDED.live,
+          updated_at = CURRENT_TIMESTAMP
+        `,
+        [
+          ad_code,
+          (r["Month"] || "").trim() || null,
+          (r["Date"] || "").trim() || null,
+          (r["Creative Name"] || "").trim() || null,
+          (r["Creative Link"] || "").trim() || null,
+          (r["Product"] || "").trim() || null,
+          (r["Funnel Level"] || "").trim() || null,
+          (r["Ad Objective"] || "").trim() || null,
+          (r["Creative Type (Format)"] || "").trim() || null,
+          (r["Visual Style"] || "").trim() || null,
+          (r["Content/ Pillar Bucket ( Narrative )"] || "").trim() || null,
+          (r["Hook"] || "").trim() || null,
+          (r["Key RTB (Reason to Buy)"] || "").trim() || null,
+          (r["Voice Over"] || "").trim() || null,
+          (r["Primary Emotion/Tone"] || "").trim() || null,
+          (r["Language / Captions / Supers"] || "").trim() || null,
+          (r["Offer"] || "").trim() || null,
+          (r["Prices"] || "").trim() || null,
+          (r["Season"] || "").trim() || null,
+          (r["Production Team"] || "").trim() || null,
+          (r["Created By"] || "").trim() || null,
+          (r["Starring (Name of Person in Video / Product Only)"] || "").trim() ||
+            null,
+          (r["Meta Ad Title"] || "").trim() || null,
+          (r["Meta Ad Descriptor "] || r["Meta Ad Descriptor"] || "").trim() ||
+            null,
+          (r["Live"] || "").trim() || null,
+        ]
+      );
+
+      metaRowsUpserted++;
+    }
+
+    /* --------------------------
+       2) PULL META (YESTERDAY)
+    --------------------------- */
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const dateStr = yesterday.toISOString().split("T")[0];
-
-    console.log("Pulling Meta data for:", dateStr);
 
     const accountId = process.env.META_AD_ACCOUNT_ID;
     const accessToken = process.env.META_ACCESS_TOKEN;
@@ -90,6 +211,8 @@ app.get("/run-daily", async (req, res) => {
       console.error(json);
       return res.status(500).send("Meta API error");
     }
+
+    let factRowsUpserted = 0;
 
     for (const row of json.data) {
       const impressions = parseInt(row.impressions || 0);
@@ -110,8 +233,7 @@ app.get("/run-daily", async (req, res) => {
         const purchaseValue = row.action_values.find(
           (a) => a.action_type === "purchase"
         );
-        if (purchaseValue)
-          purchase_value = parseFloat(purchaseValue.value);
+        if (purchaseValue) purchase_value = parseFloat(purchaseValue.value);
       }
 
       const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
@@ -119,12 +241,8 @@ app.get("/run-daily", async (req, res) => {
       const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
       const roas = spend > 0 ? purchase_value / spend : 0;
 
-      const match = row.ad_name
-        ? row.ad_name.match(/NK[-_]\d+/i)
-        : null;
-      const adCode = match
-        ? match[0].toUpperCase().replace("_", "-")
-        : null;
+      const match = row.ad_name ? row.ad_name.match(/NK[-_]\d+/i) : null;
+      const adCode = match ? match[0].toUpperCase().replace("_", "-") : null;
 
       await pool.query(
         `INSERT INTO meta_ads_fact (
@@ -163,10 +281,12 @@ app.get("/run-daily", async (req, res) => {
           roas,
         ]
       );
+
+      factRowsUpserted++;
     }
 
     res.send(
-      `Inserted/updated ${json.data.length} ads for ${dateStr}`
+      `OK: metadata upserted=${metaRowsUpserted}, fact upserted=${factRowsUpserted} for ${dateStr}`
     );
   } catch (error) {
     console.error(error);
