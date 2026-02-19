@@ -38,6 +38,28 @@ app.post("/ingest-meta", async (req, res) => {
   }
 });
 
+//Daily sync
+app.get('/run-daily', async (req, res) => {
+  try {
+
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const dateStr = yesterday.toISOString().split('T')[0];
+
+    console.log("Pulling data for:", dateStr);
+
+    // TODO: Call Meta API here
+    // TODO: Insert into Postgres
+
+    res.send(`Daily pull executed for ${dateStr}`);
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Error running daily job');
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
