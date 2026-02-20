@@ -1,0 +1,30 @@
+name: Run daily Meta sync
+
+on:
+  schedule:
+    # Runs at 03:30 IST daily = 22:00 UTC (previous day)
+    - cron: "0 22 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run_daily:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /run-daily
+        env:
+          RUN_DAILY_URL: ${{ secrets.RUN_DAILY_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$RUN_DAILY_URL" ]; then
+            echo "Missing RUN_DAILY_URL secret" >&2
+            exit 1
+          fi
+          if [ -z "$CRON_SECRET" ]; then
+            echo "Missing CRON_SECRET secret" >&2
+            exit 1
+          fi
+
+          echo "Calling: $RUN_DAILY_URL"
+          curl -sS -f "${RUN_DAILY_URL}?secret=${CRON_SECRET}" | tee response.txt
+          echo "----"
+          echo "Response saved to response.txt"
